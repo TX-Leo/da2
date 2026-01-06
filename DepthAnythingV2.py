@@ -10,7 +10,7 @@ import json
 import numpy as np
 import imageio
 from typing import List, Dict
-from pathlib import Path
+from huggingface_hub import hf_hub_download
 
 from depth_anything_v2.depth_anything_v2.dpt import DepthAnythingV2 as DA2
 
@@ -32,11 +32,13 @@ class DepthInferenceEngine:
         print(f"[*] [Engine] 正在加载模型: {encoder} | 运行设备: {self.device}")
         self.model = DA2(**self.model_configs[encoder])
         
-        ckpt_path = os.path.join(Path(__file__).resolve().parent, f"checkpoints/depth_anything_v2_{encoder}.pth")
-
-        if not os.path.exists(ckpt_path):
-            raise FileNotFoundError(f"未找到模型权重文件: {ckpt_path}")
-            
+        print(f"║ Checking/Downloading depthanythingv3 weights from Hugging Face Cache...")
+        try:
+            ckpt_path = hf_hub_download(repo_id="depth-anything/Depth-Anything-V2-Small", filename="depth_anything_v2_vits.pth")
+            print(f"Weights is downloaded successfully to: {ckpt_path}")
+        except Exception as e:
+            print(f"║ [Error] Failed to download weights: {e}")
+            raise e
         self.model.load_state_dict(torch.load(ckpt_path, map_location='cpu'))
         self.model = self.model.to(self.device).eval()
         
@@ -59,6 +61,17 @@ class DepthInferenceEngine:
         # 生成 BGR 格式彩色图
         color_depth = cv2.applyColorMap(depth_norm, cv2.COLORMAP_VIRIDIS)
         return color_depth
+
+    def cleanup(self):
+        """释放模型显存"""
+        if hasattr(self, 'model'):
+            self.model.to('cpu') # 先移到 CPU
+            del self.model
+        import gc
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        print("[*] [Engine] CUDA memory released.")
 
 class PerformanceMonitor:
     """
@@ -153,6 +166,13 @@ class DataManager:
             json.dump(metrics, f, indent=4, ensure_ascii=False)
         
         print(f"[*] [IO] 媒体文件已保存至: {self.da2_root}")
+    
+    def cleanup(self):
+        """清空缓存的帧数据，释放内存"""
+        if hasattr(self, 'gif_frames'):
+            self.gif_frames.clear()
+            del self.gif_frames
+        print("[*] [IO] RAM cache cleared.")
 
 class DepthAnythingV2:
     def __init__(self, mps_path: str, fps: int = 0):
@@ -219,14 +239,34 @@ class DepthAnythingV2:
         print(f" • 平均帧率     : {summary['benchmarks']['throughput_fps']} FPS")
         print("═"*60 + "\n")
 
+        self.cleanup()
+    
+    def cleanup(self):
+        """一键清理所有资源"""
+        print("\n" + "╔" + "═" * 60 + "╗")
+        print(f"║{'CLEANING UP DEPTH ANYTHING V2 RESOURCES':^60}║")
+        
+        # 1. 清理模型
+        self.engine.cleanup()
+        
+        # 2. 清理内存中的帧缓存
+        self.data.cleanup()
+        
+        # 3. 彻底删除引用
+        import gc
+        gc.collect()
+        
+        print("╚" + "═" * 60 + "╝\n")
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--mps_path", type=str, required=True, help="根目录路径")
+    parser.add_argument("--run_module", action='store_true', default=True, help="一个一个模块的运行，以免出现CUDA out of memory")
     args = parser.parse_args()
-
-    depth_anything_v2 = DepthAnythingV2(args.mps_path)
-    depth_anything_v2.run()
+    
+    da2 = DepthAnythingV2(args.mps_path)
+    da2.run()
 
 # conda activate aria
 # cd src
-# python -m depth_anything_v2.DepthAnythingV2 --mps_path "./data/mps_open_cabinet_5_vrs/" 
+# python -m depth_anything_v2.DepthAnythingV2 --mps_path "./data/open_cabinet_0/mps_open_cabinet_0_005_vrs/" 
