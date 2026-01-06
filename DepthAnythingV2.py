@@ -1,3 +1,6 @@
+# -*- coding: utf-8 -*-
+# @FileName: DepthAnythingV2.py
+
 import os
 import cv2
 import torch
@@ -7,11 +10,10 @@ import json
 import numpy as np
 import imageio
 from typing import List, Dict
-from depth_anything_v2.dpt import DepthAnythingV2
+from pathlib import Path
 
-# =================================================================
-# 1. 模型推理引擎类
-# =================================================================
+from depth_anything_v2.depth_anything_v2.dpt import DepthAnythingV2 as DA2
+
 class DepthInferenceEngine:
     """
     负责深度估计模型的加载、预热以及核心推理与彩色化处理
@@ -28,9 +30,10 @@ class DepthInferenceEngine:
         }
         
         print(f"[*] [Engine] 正在加载模型: {encoder} | 运行设备: {self.device}")
-        self.model = DepthAnythingV2(**self.model_configs[encoder])
+        self.model = DA2(**self.model_configs[encoder])
         
-        ckpt_path = f'checkpoints/depth_anything_v2_{encoder}.pth'
+        ckpt_path = os.path.join(Path(__file__).resolve().parent, f"checkpoints/depth_anything_v2_{encoder}.pth")
+
         if not os.path.exists(ckpt_path):
             raise FileNotFoundError(f"未找到模型权重文件: {ckpt_path}")
             
@@ -57,9 +60,6 @@ class DepthInferenceEngine:
         color_depth = cv2.applyColorMap(depth_norm, cv2.COLORMAP_VIRIDIS)
         return color_depth
 
-# =================================================================
-# 2. 性能统计与评估结果类
-# =================================================================
 class PerformanceMonitor:
     """
     负责记录处理指标并导出 JSON 评估结果
@@ -97,9 +97,6 @@ class PerformanceMonitor:
             }
         }
 
-# =================================================================
-# 3. 数据 IO 与媒体生成类
-# =================================================================
 class DataManager:
     """
     负责文件扫描、单帧保存、视频/GIF 合成及 JSON 导出
@@ -107,8 +104,8 @@ class DataManager:
     def __init__(self, mps_path: str):
         self.root = mps_path
         self.input_base = os.path.join(self.root, "aria/all_data")
-        self.output_base = os.path.join(self.root, "da2/all_data")
-        self.da2_root = os.path.join(self.root, "da2")
+        self.output_base = os.path.join(self.root, "aria/all_data")
+        self.da2_root = os.path.join(self.root, "aria")
         
         # 确保目录存在
         os.makedirs(self.output_base, exist_ok=True)
@@ -157,14 +154,25 @@ class DataManager:
         
         print(f"[*] [IO] 媒体文件已保存至: {self.da2_root}")
 
-# =================================================================
-# 4. 主程序类
-# =================================================================
-class ProcessorApp:
-    def __init__(self, mps_path: str, fps: int = 10):
+class DepthAnythingV2:
+    def __init__(self, mps_path: str, fps: int = 0):
         self.engine = DepthInferenceEngine()
         self.data = DataManager(mps_path)
         self.monitor = PerformanceMonitor(fps, self.engine.encoder_type, self.engine.device)
+        
+        if fps == 0: # 未赋值（从文件里读取）
+            cam_config_json_path = os.path.join(mps_path,'aria','aria_cam_config.json')
+            if os.path.exists(cam_config_json_path):
+                try:
+                    with open(cam_config_json_path, 'r', encoding='utf-8') as f:
+                        data = json.load(f)
+                    fps = data.get("fps")
+                except (json.JSONDecodeError, IOError):
+                    # 如果文件损坏、为空或读取失败，设为默认值
+                    fps = 10 # default
+            else:
+                # 如果文件不存在，直接设为默认值
+                fps = 10 # default
         self.fps = fps
 
     def run(self):
@@ -214,8 +222,11 @@ class ProcessorApp:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--mps_path", type=str, required=True, help="根目录路径")
-    parser.add_argument("--fps", type=int, default=10, help="输出视频和GIF的帧率")
     args = parser.parse_args()
 
-    app = ProcessorApp(args.mps_path, fps=args.fps)
-    app.run()
+    depth_anything_v2 = DepthAnythingV2(args.mps_path)
+    depth_anything_v2.run()
+
+# conda activate aria
+# cd src
+# python -m depth_anything_v2.DepthAnythingV2 --mps_path "./data/mps_open_cabinet_5_vrs/" 
